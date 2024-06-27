@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
+import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -28,7 +29,7 @@ from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.typing import ConfigType
 from midealocal.device import DeviceType, ProtocolVersion
 from midealocal.devices import device_selector
@@ -278,6 +279,31 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
         _LOGGER.debug("Migration to configuration version 2 successful")
 
+    # 2 -> 3: migrate domain
+    if config_entry.version == 2:  # noqa: PLR2004
+        _LOGGER.debug("Migrating configuration from version 2")
+
+        # Migrate config entry
+        new_data = {**config_entry.data}
+        new_data["domain"] = DOMAIN
+        if (MAJOR_VERSION, MINOR_VERSION) >= (2024, 3):
+            hass.config_entries.async_update_entry(config_entry, version=2)
+        else:
+            config_entry.version = 2
+            hass.config_entries.async_update_entry(config_entry)
+
+        # Migrate device.
+        await _async_migrate_device_identifiers(hass, config_entry)
+
+        # Migrate entities.
+        await er.async_migrate_entries(
+            hass,
+            config_entry.entry_id,
+            _migrate_entities_domain,
+        )
+
+        _LOGGER.debug("Migration to configuration version 3 successful")
+
     return True
 
 
@@ -316,3 +342,9 @@ async def _async_migrate_device_identifiers(
         # Leave outer for loop if device entry is already found.
         if device_entry_found:
             break
+
+
+@callback
+def _migrate_entities_domain(entity_entry: er.RegistryEntry) -> dict[str, Any]:  # noqa: ARG001
+    """Migrate entities domain to the new name."""
+    return {"platform": DOMAIN}
